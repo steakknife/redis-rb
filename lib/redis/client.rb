@@ -375,6 +375,7 @@ class Redis
 
       # Override defaults from URL if given
       if url
+        $stderr.puts "redis client url = '#{url}'"
         require "uri"
 
         uri = URI(url)
