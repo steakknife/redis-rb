@@ -1,5 +1,5 @@
-require "redis/connection/registry"
-require "redis/errors"
+require_relative "registry"
+require_relative "../errors"
 require "hiredis/connection"
 require "timeout"
 
@@ -9,15 +9,18 @@ class Redis
 
       def self.connect(config)
         connection = ::Hiredis::Connection.new
+        connect_timeout = (config.fetch(:connect_timeout, 0) * 1_000_000).to_i
 
         if config[:scheme] == "unix"
-          connection.connect_unix(config[:path], Integer(config[:connect_timeout] * 1_000_000))
+          connection.connect_unix(config[:path], connect_timeout)
+        elsif config[:scheme] == "rediss" || config[:ssl]
+          raise NotImplementedError, "SSL not supported by hiredis driver"
         else
-          connection.connect(config[:host], config[:port], Integer(config[:connect_timeout] * 1_000_000))
+          connection.connect(config[:host], config[:port], connect_timeout)
         end
 
         instance = new(connection)
-        instance.timeout = config[:timeout]
+        instance.timeout = config[:read_timeout]
         instance
       rescue Errno::ETIMEDOUT
         raise TimeoutError

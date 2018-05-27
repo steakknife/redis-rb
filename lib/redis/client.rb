@@ -1,4 +1,4 @@
-require "redis/errors"
+require_relative "errors"
 require "socket"
 require "cgi"
 
@@ -12,7 +12,6 @@ class Redis
       :port => 6379,
       :path => nil,
       :timeout => 5.0,
-      :connect_timeout => 5.0,
       :password => nil,
       :db => 0,
       :driver => nil,
@@ -22,9 +21,7 @@ class Redis
       :inherit_socket => false
     }
 
-    def options
-      Marshal.load(Marshal.dump(@options))
-    end
+    attr_reader :options
 
     def scheme
       @options[:scheme]
@@ -42,8 +39,16 @@ class Redis
       @options[:path]
     end
 
+    def read_timeout
+      @options[:read_timeout]
+    end
+
+    def connect_timeout
+      @options[:connect_timeout]
+    end
+
     def timeout
-      @options[:timeout]
+      @options[:read_timeout]
     end
 
     def password
@@ -77,6 +82,8 @@ class Redis
       @connection = nil
       @command_map = {}
 
+      @pending_reads = 0
+
       if options.include?(:sentinels)
         @connector = Connector::Sentinel.new(@options)
       else
@@ -92,6 +99,7 @@ class Redis
         establish_connection
         call [:auth, password] if password
         call [:select, db] if db != 0
+        call [:client, :setname, @options[:id]] if @options[:id]
         @connector.check(self)
       end
 
@@ -106,21 +114,21 @@ class Redis
       path || "#{host}:#{port}"
     end
 
-    def call(command, &block)
+    def call(command)
       reply = process([command]) { read }
       raise reply if reply.is_a?(CommandError)
 
-      if block
-        block.call(reply)
+      if block_given?
+        yield reply
       else
         reply
       end
     end
 
-    def call_loop(command)
+    def call_loop(command, timeout = 0)
       error = nil
 
-      result = without_socket_timeout do
+      result = with_socket_timeout(timeout) do
         process([command]) do
           loop do
             reply = read
@@ -142,9 +150,12 @@ class Redis
     end
 
     def call_pipeline(pipeline)
+      commands = pipeline.commands
+      return [] if commands.empty?
+
       with_reconnect pipeline.with_reconnect? do
         begin
-          pipeline.finish(call_pipelined(pipeline.commands)).tap do
+          pipeline.finish(call_pipelined(commands)).tap do
             self.db = pipeline.db if pipeline.db
           end
         rescue ConnectionError => e
@@ -172,15 +183,21 @@ class Redis
       reconnect = @reconnect
 
       begin
+        exception = nil
+
         process(commands) do
           result[0] = read
 
           @reconnect = false
 
           (commands.size - 1).times do |i|
-            result[i + 1] = read
+            reply = read
+            result[i + 1] = reply
+            exception = reply if exception.nil? && reply.is_a?(CommandError)
           end
         end
+
+        raise exception if exception
       ensure
         @reconnect = reconnect
       end
@@ -243,12 +260,15 @@ class Redis
 
     def read
       io do
-        connection.read
+        value = connection.read
+        @pending_reads -= 1
+        value
       end
     end
 
     def write(command)
       io do
+        @pending_reads += 1
         connection.write(command)
       end
     end
@@ -312,20 +332,25 @@ class Redis
       server = @connector.resolve.dup
 
       @options[:host] = server[:host]
-      @options[:port] = server[:port]
+      @options[:port] = Integer(server[:port]) if server.include?(:port)
 
-      @connection = @options[:driver].connect(server)
+      @connection = @options[:driver].connect(@options)
+      @pending_reads = 0
     rescue TimeoutError,
+           SocketError,
            Errno::ECONNREFUSED,
            Errno::EHOSTDOWN,
            Errno::EHOSTUNREACH,
            Errno::ENETUNREACH,
+           Errno::ENOENT,
            Errno::ETIMEDOUT
 
       raise CannotConnectError, "Error connecting to Redis on #{location} (#{$!.class})"
     end
 
     def ensure_connected
+      disconnect if @pending_reads > 0
+
       attempts = 0
 
       begin
@@ -358,6 +383,8 @@ class Redis
     end
 
     def _parse_options(options)
+      return options if options[:_parsed]
+
       defaults = DEFAULTS.dup
       options = options.dup
 
@@ -381,12 +408,9 @@ class Redis
 
         if uri.scheme == "unix"
           defaults[:path]   = uri.path
-        elsif uri.scheme == "redis"
-          # Require the URL to have at least a host
-          raise ArgumentError, "invalid url" unless uri.host
-
+        elsif uri.scheme == "redis" || uri.scheme == "rediss"
           defaults[:scheme]   = uri.scheme
-          defaults[:host]     = uri.host
+          defaults[:host]     = uri.host if uri.host
           defaults[:port]     = uri.port if uri.port
           defaults[:password] = CGI.unescape(uri.password) if uri.password
           defaults[:db]       = uri.path[1..-1].to_i if uri.path
@@ -394,6 +418,8 @@ class Redis
         else
           raise ArgumentError, "invalid uri scheme '#{uri.scheme}'"
         end
+
+        defaults[:ssl] = true if uri.scheme == "rediss"
       end
 
       # Use default when option is not specified or nil
@@ -412,12 +438,17 @@ class Redis
         options[:port] = options[:port].to_i
       end
 
-      options[:timeout] = options[:timeout].to_f
-      options[:connect_timeout] = if options[:connect_timeout]
-        options[:connect_timeout].to_f
-      else
-        options[:timeout]
+      if options.has_key?(:timeout)
+        options[:connect_timeout] ||= options[:timeout]
+        options[:read_timeout]    ||= options[:timeout]
+        options[:write_timeout]   ||= options[:timeout]
       end
+
+      options[:connect_timeout] = Float(options[:connect_timeout])
+      options[:read_timeout]    = Float(options[:read_timeout])
+      options[:write_timeout]   = Float(options[:write_timeout])
+
+      options[:reconnect_attempts] = options[:reconnect_attempts].to_i
 
       options[:db] = options[:db].to_i
       options[:driver] = _parse_driver(options[:driver]) || Connection.drivers.last
@@ -425,12 +456,12 @@ class Redis
       case options[:tcp_keepalive]
       when Hash
         [:time, :intvl, :probes].each do |key|
-          unless options[:tcp_keepalive][key].is_a?(Fixnum)
-            raise "Expected the #{key.inspect} key in :tcp_keepalive to be a Fixnum"
+          unless options[:tcp_keepalive][key].is_a?(Integer)
+            raise "Expected the #{key.inspect} key in :tcp_keepalive to be an Integer"
           end
         end
 
-      when Fixnum
+      when Integer
         if options[:tcp_keepalive] >= 60
           options[:tcp_keepalive] = {:time => options[:tcp_keepalive] - 20, :intvl => 10, :probes => 2}
 
@@ -442,6 +473,8 @@ class Redis
         end
       end
 
+      options[:_parsed] = true
+
       options
     end
 
@@ -450,11 +483,16 @@ class Redis
 
       if driver.kind_of?(String)
         begin
-          require "redis/connection/#{driver}"
-          driver = Connection.const_get(driver.capitalize)
-        rescue LoadError, NameError
-          raise RuntimeError, "Cannot load driver #{driver.inspect}"
+          require_relative "connection/#{driver}"
+        rescue LoadError, NameError => e
+          begin
+            require "connection/#{driver}"
+          rescue LoadError, NameError => e
+            raise RuntimeError, "Cannot load driver #{driver.inspect}: #{e.message}"
+          end
         end
+
+        driver = Connection.const_get(driver.capitalize)
       end
 
       driver
@@ -462,7 +500,7 @@ class Redis
 
     class Connector
       def initialize(options)
-        @options = options
+        @options = options.dup
       end
 
       def resolve
@@ -476,9 +514,12 @@ class Redis
         def initialize(options)
           super(options)
 
-          @sentinels = options.fetch(:sentinels).dup
-          @role = options[:role].to_s
-          @master = options[:host]
+          @options[:password] = DEFAULTS.fetch(:password)
+          @options[:db] = DEFAULTS.fetch(:db)
+
+          @sentinels = @options.delete(:sentinels).dup
+          @role = @options.fetch(:role, "master").to_s
+          @master = @options[:host]
         end
 
         def check(client)
@@ -493,7 +534,7 @@ class Redis
           end
 
           if role != @role
-            disconnect
+            client.disconnect
             raise ConnectionError, "Instance role mismatch. Expected #{@role}, got #{role}."
           end
         end
@@ -513,7 +554,11 @@ class Redis
 
         def sentinel_detect
           @sentinels.each do |sentinel|
-            client = Client.new(:host => sentinel[:host], :port => sentinel[:port], :timeout => 0.3)
+            client = Client.new(@options.merge({
+              :host => sentinel[:host],
+              :port => sentinel[:port],
+              :reconnect_attempts => 0,
+            }))
 
             begin
               if result = yield(client)
@@ -523,12 +568,13 @@ class Redis
 
                 return result
               end
+            rescue BaseConnectionError
             ensure
               client.disconnect
             end
           end
 
-          return nil
+          raise CannotConnectError, "No sentinels available."
         end
 
         def resolve_master

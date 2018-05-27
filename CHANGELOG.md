@@ -1,24 +1,96 @@
-# 4.x (unreleased)
+# 4.0.1
 
-## Planned breaking changes:
-* `Redis#client` will no longer expose the underlying `Redis::Client`;
-  it has not yet been determined how 4.0 will expose the underlying
-  functionality, but we will make every attempt to provide a final minor
-  release of 3.x that provides the new interfaces in order to facilitate
-  a smooth transition.
+* `Redis::Distributed` now supports `mget` and `mapped_mget`. See #687.
 
-* Ruby 1.8.7 (and the 1.8 modes of JRuby and Rubinius) will no longer be
-  supported; 1.8.x entered end-of-life in June of 2012 and stopped receiving
-  security updates in June of 2013; continuing to support it would prevent
-  the use of newer features of Ruby.
+* `Redis::Distributed` now supports `sscan` and `sscan_each`. See #572.
 
-# (unreleased)
+* `Redis#connection` returns a hash with connection information.
+  You shouldn't need to call `Redis#_client`, ever.
+
+* `Redis#flushdb` and `Redis#flushall` now support the `:async` option. See #706.
+
+
+# 4.0
+
+* Removed `Redis.connect`. Use `Redis.new`.
+
+* Removed `Redis#[]` and `Redis#[]=` aliases.
+
+* Added support for `CLIENT` commands. The lower-level client can be
+  accessed via `Redis#_client`.
+
+* Dropped official support for Ruby < 2.2.2.
+
+# 3.3.5
+
+* Fixed Ruby 1.8 compatibility after backporting `Redis#connection`. See #719.
+
+# 3.3.4 (yanked)
+
+* `Redis#connection` returns a hash with connection information.
+  You shouldn't need to call `Redis#_client`, ever.
+
+# 3.3.3
+
+* Improved timeout handling after dropping Timeout module.
+
+# 3.3.2
+
+* Added support for `SPOP` with COUNT. See #628.
+
+* Fixed connection glitches when using SSL. See #644.
+
+# 3.3.1
+
+* Remove usage of Timeout::timeout, refactor into using low level non-blocking writes.
+  This fixes a memory leak due to Timeout creating threads on each invocation.
+
+# 3.3.0
+
+* Added support for SSL/TLS. Redis doesn't support SSL natively, so you still
+  need to run a terminating proxy on Redis' side. See #496.
+
+* Added `read_timeout` and `write_timeout` options. See #437, #482.
+
+* Added support for pub/sub with timeouts. See #329.
+
+* Added `Redis#call`, `Redis#queue` and `Redis#commit` as a more minimal API to
+  the client.
+
+* Deprecated `Redis#disconnect!` in favor of `Redis#close`.
+
+# 3.2.2
+
+* Added support for `ZADD` options `NX`, `XX`, `CH`, `INCR`. See #547.
+
+* Added support for sentinel commands. See #556.
+
+* New `:id` option allows you to identify the client against Redis. See #510.
+
+* `Redis::Distributed` will raise when adding two nodes with the same ID.
+  See #354.
+
+# 3.2.1
 
 * Added support for `PUBSUB` command.
 
 * More low-level socket errors are now raised as `CannotConnectError`.
 
 * Added `:connect_timeout` option.
+
+* Added support for `:limit` option for `ZREVRANGEBYLEX`.
+
+* Fixed an issue where connections become inconsistent when using Ruby's
+  Timeout module outside of the client (see #501, #502).
+
+* Added `Redis#disconnect!` as a public-API way of disconnecting the client
+  (without needing to use `QUIT`). See #506.
+
+* Fixed Sentinel support with Hiredis.
+
+* Fixed Sentinel support when using authentication and databases.
+
+* Improved resilience when trying to contact sentinels.
 
 # 3.2.0
 

@@ -1,6 +1,6 @@
-require "redis/connection/command_helper"
-require "redis/connection/registry"
-require "redis/errors"
+require_relative "command_helper"
+require_relative "registry"
+require_relative "../errors"
 require "em-synchrony"
 require "hiredis/reader"
 
@@ -8,6 +8,8 @@ class Redis
   module Connection
     class RedisClient < EventMachine::Connection
       include EventMachine::Deferrable
+
+      attr_accessor :timeout
 
       def post_init
         @req = nil
@@ -44,6 +46,9 @@ class Redis
 
       def read
         @req = EventMachine::DefaultDeferrable.new
+        if @timeout > 0
+          @req.timeout(@timeout, :timeout)
+        end
         EventMachine::Synchrony.sync @req
       end
 
@@ -67,7 +72,17 @@ class Redis
 
       def self.connect(config)
         if config[:scheme] == "unix"
-          conn = EventMachine.connect_unix_domain(config[:path], RedisClient)
+          begin
+            conn = EventMachine.connect_unix_domain(config[:path], RedisClient)
+          rescue RuntimeError => e
+            if e.message == "no connection"
+              raise Errno::ECONNREFUSED
+            else
+              raise e
+            end
+          end
+        elsif config[:scheme] == "rediss" || config[:ssl]
+          raise NotImplementedError, "SSL not supported by synchrony driver"
         else
           conn = EventMachine.connect(config[:host], config[:port], RedisClient) do |c|
             c.pending_connect_timeout = [config[:connect_timeout], 0.1].max
@@ -81,7 +96,7 @@ class Redis
         raise Errno::ECONNREFUSED if Fiber.yield == :refused
 
         instance = new(conn)
-        instance.timeout = config[:timeout]
+        instance.timeout = config[:read_timeout]
         instance
       end
 
@@ -94,7 +109,7 @@ class Redis
       end
 
       def timeout=(timeout)
-        @timeout = timeout
+        @connection.timeout = timeout
       end
 
       def disconnect
@@ -113,6 +128,8 @@ class Redis
           payload
         elsif type == :error
           raise payload
+        elsif type == :timeout
+          raise TimeoutError
         else
           raise "Unknown type #{type.inspect}"
         end

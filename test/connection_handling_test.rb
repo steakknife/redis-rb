@@ -1,6 +1,4 @@
-# encoding: UTF-8
-
-require File.expand_path("helper", File.dirname(__FILE__))
+require_relative "helper"
 
 class TestConnectionHandling < Test::Unit::TestCase
 
@@ -17,6 +15,19 @@ class TestConnectionHandling < Test::Unit::TestCase
     end
   end
 
+  def test_id
+    commands = {
+      :client => lambda { |cmd, name| $name = [cmd, name]; "+OK" },
+      :ping  => lambda { "+PONG" },
+    }
+
+    redis_mock(commands, :id => "client-name") do |redis|
+      assert_equal "PONG", redis.ping
+    end
+
+    assert_equal ["setname","client-name"], $name
+  end
+
   def test_ping
     assert_equal "PONG", r.ping
   end
@@ -27,7 +38,7 @@ class TestConnectionHandling < Test::Unit::TestCase
     r.select 14
     assert_equal nil, r.get("foo")
 
-    r.client.disconnect
+    r._client.disconnect
 
     assert_equal nil, r.get("foo")
   end
@@ -35,7 +46,61 @@ class TestConnectionHandling < Test::Unit::TestCase
   def test_quit
     r.quit
 
-    assert !r.client.connected?
+    assert !r._client.connected?
+  end
+
+  def test_close
+    quit = 0
+
+    commands = {
+      :quit => lambda do
+        quit += 1
+        "+OK"
+      end
+    }
+
+    redis_mock(commands) do |redis|
+      assert_equal 0, quit
+
+      redis.quit
+
+      assert_equal 1, quit
+
+      redis.ping
+
+      redis.close
+
+      assert_equal 1, quit
+
+      assert !redis.connected?
+    end
+  end
+
+  def test_disconnect
+    quit = 0
+
+    commands = {
+      :quit => lambda do
+        quit += 1
+        "+OK"
+      end
+    }
+
+    redis_mock(commands) do |redis|
+      assert_equal 0, quit
+
+      redis.quit
+
+      assert_equal 1, quit
+
+      redis.ping
+
+      redis.disconnect!
+
+      assert_equal 1, quit
+
+      assert !redis.connected?
+    end
   end
 
   def test_shutdown
@@ -81,7 +146,7 @@ class TestConnectionHandling < Test::Unit::TestCase
       end
 
       assert_equal nil, result
-      assert !redis.client.connected?
+      assert !redis._client.connected?
     end
   end
 
@@ -121,7 +186,7 @@ class TestConnectionHandling < Test::Unit::TestCase
       end
 
       assert_equal nil, result
-      assert !redis.client.connected?
+      assert !redis._client.connected?
     end
   end
 
@@ -184,6 +249,27 @@ class TestConnectionHandling < Test::Unit::TestCase
       assert_equal "100", r.config(:get, "*")["timeout"]
     ensure
       r.config :set, "timeout", 300
+    end
+  end
+
+  driver(:ruby, :hiredis) do
+    def test_consistency_on_multithreaded_env
+      t = nil
+
+      commands = {
+        :set => lambda { |key, value| t.kill; "+OK\r\n" },
+        :incr => lambda { |key| ":1\r\n" },
+      }
+
+      redis_mock(commands) do |redis|
+        t = Thread.new do
+          redis.set("foo", "bar")
+        end
+
+        t.join
+
+        assert_equal 1, redis.incr("baz")
+      end
     end
   end
 end

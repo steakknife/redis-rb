@@ -1,10 +1,4 @@
 class Redis
-  unless defined?(::BasicObject)
-    class BasicObject
-      instance_methods.each { |meth| undef_method(meth) unless meth =~ /\A(__|instance_eval)/ }
-    end
-  end
-
   class Pipeline
     attr_accessor :db
 
@@ -26,6 +20,10 @@ class Redis
 
     def shutdown?
       @shutdown
+    end
+
+    def empty?
+      @futures.empty?
     end
 
     def call(command, &block)
@@ -92,7 +90,11 @@ class Redis
       end
 
       def commands
-        [[:multi]] + super + [[:exec]]
+        if empty?
+          []
+        else
+          [[:multi]] + super + [[:exec]]
+        end
       end
     end
   end
