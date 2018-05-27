@@ -1,6 +1,4 @@
-# encoding: UTF-8
-
-require File.expand_path("helper", File.dirname(__FILE__))
+require_relative "helper"
 
 class TestInternals < Test::Unit::TestCase
 
@@ -48,23 +46,23 @@ class TestInternals < Test::Unit::TestCase
   end
 
   def test_redis_current
-    assert_equal "127.0.0.1", Redis.current.client.host
-    assert_equal 6379, Redis.current.client.port
-    assert_equal 0, Redis.current.client.db
+    assert_equal "127.0.0.1", Redis.current._client.host
+    assert_equal 6379, Redis.current._client.port
+    assert_equal 0, Redis.current._client.db
 
     Redis.current = Redis.new(OPTIONS.merge(:port => 6380, :db => 1))
 
     t = Thread.new do
-      assert_equal "127.0.0.1", Redis.current.client.host
-      assert_equal 6380, Redis.current.client.port
-      assert_equal 1, Redis.current.client.db
+      assert_equal "127.0.0.1", Redis.current._client.host
+      assert_equal 6380, Redis.current._client.port
+      assert_equal 1, Redis.current._client.db
     end
 
     t.join
 
-    assert_equal "127.0.0.1", Redis.current.client.host
-    assert_equal 6380, Redis.current.client.port
-    assert_equal 1, Redis.current.client.db
+    assert_equal "127.0.0.1", Redis.current._client.host
+    assert_equal 6380, Redis.current._client.port
+    assert_equal 1, Redis.current._client.db
   end
 
   def test_redis_connected?
@@ -80,27 +78,27 @@ class TestInternals < Test::Unit::TestCase
 
   def test_default_id_with_host_and_port
     redis = Redis.new(OPTIONS.merge(:host => "host", :port => "1234", :db => 0))
-    assert_equal "redis://host:1234/0", redis.client.id
+    assert_equal "redis://host:1234/0", redis._client.id
   end
 
   def test_default_id_with_host_and_port_and_explicit_scheme
     redis = Redis.new(OPTIONS.merge(:host => "host", :port => "1234", :db => 0, :scheme => "foo"))
-    assert_equal "redis://host:1234/0", redis.client.id
+    assert_equal "redis://host:1234/0", redis._client.id
   end
 
   def test_default_id_with_path
     redis = Redis.new(OPTIONS.merge(:path => "/tmp/redis.sock", :db => 0))
-    assert_equal "redis:///tmp/redis.sock/0", redis.client.id
+    assert_equal "redis:///tmp/redis.sock/0", redis._client.id
   end
 
   def test_default_id_with_path_and_explicit_scheme
     redis = Redis.new(OPTIONS.merge(:path => "/tmp/redis.sock", :db => 0, :scheme => "foo"))
-    assert_equal "redis:///tmp/redis.sock/0", redis.client.id
+    assert_equal "redis:///tmp/redis.sock/0", redis._client.id
   end
 
   def test_override_id
     redis = Redis.new(OPTIONS.merge(:id => "test"))
-    assert_equal redis.client.id, "test"
+    assert_equal redis._client.id, "test"
   end
 
   def test_timeout
@@ -127,7 +125,7 @@ class TestInternals < Test::Unit::TestCase
       redis = Redis.new(OPTIONS.merge(:tcp_keepalive => keepalive))
       redis.ping
 
-      connection = redis.client.connection
+      connection = redis._client.connection
       actual_keepalive = connection.get_tcp_keepalive
 
       [:time, :intvl, :probes].each do |key|
@@ -158,6 +156,13 @@ class TestInternals < Test::Unit::TestCase
       Redis.new(opts).ping
     end
     assert (Time.now - start_time) <= opts[:timeout]
+  end
+
+  def test_missing_socket
+    opts = { :path => '/missing.sock' }
+    assert_raise Redis::CannotConnectError do
+      Redis.new(opts).ping
+    end
   end
 
   def close_on_ping(seq, options = {})
@@ -217,7 +222,7 @@ class TestInternals < Test::Unit::TestCase
         redis.ping
       end
 
-      assert !redis.client.connected?
+      assert !redis._client.connected?
     end
   end
 
@@ -233,7 +238,7 @@ class TestInternals < Test::Unit::TestCase
         redis.ping
       end
 
-      assert !redis.client.connected?
+      assert !redis._client.connected?
     end
   end
 
@@ -246,7 +251,7 @@ class TestInternals < Test::Unit::TestCase
         end
       end
 
-      assert !redis.client.connected?
+      assert !redis._client.connected?
     end
   end
 
@@ -287,14 +292,14 @@ class TestInternals < Test::Unit::TestCase
 
   def test_retry_on_write_error_by_default
     close_on_connection([0]) do |redis|
-      assert_equal "1", redis.client.call(["x" * 128 * 1024])
+      assert_equal "1", redis._client.call(["x" * 128 * 1024])
     end
   end
 
   def test_retry_on_write_error_when_wrapped_in_with_reconnect_true
     close_on_connection([0]) do |redis|
       redis.with_reconnect(true) do
-        assert_equal "1", redis.client.call(["x" * 128 * 1024])
+        assert_equal "1", redis._client.call(["x" * 128 * 1024])
       end
     end
   end
@@ -303,7 +308,7 @@ class TestInternals < Test::Unit::TestCase
     close_on_connection([0]) do |redis|
       assert_raise Redis::ConnectionError do
         redis.with_reconnect(false) do
-          redis.client.call(["x" * 128 * 1024])
+          redis._client.call(["x" * 128 * 1024])
         end
       end
     end
@@ -313,7 +318,7 @@ class TestInternals < Test::Unit::TestCase
     close_on_connection([0]) do |redis|
       assert_raise Redis::ConnectionError do
         redis.without_reconnect do
-          redis.client.call(["x" * 128 * 1024])
+          redis._client.call(["x" * 128 * 1024])
         end
       end
     end
@@ -321,7 +326,7 @@ class TestInternals < Test::Unit::TestCase
 
   def test_connecting_to_unix_domain_socket
     assert_nothing_raised do
-      Redis.new(OPTIONS.merge(:path => "./test/db/redis.sock")).ping
+      Redis.new(OPTIONS.merge(:path => ENV.fetch("SOCKET_PATH"))).ping
     end
   end
 
@@ -343,23 +348,10 @@ class TestInternals < Test::Unit::TestCase
   def test_client_options
     redis = Redis.new(OPTIONS.merge(:host => "host", :port => 1234, :db => 1, :scheme => "foo"))
 
-    assert_equal "host", redis.client.options[:host]
-    assert_equal 1234, redis.client.options[:port]
-    assert_equal 1, redis.client.options[:db]
-    assert_equal "foo", redis.client.options[:scheme]
-  end
-
-  def test_does_not_change_self_client_options
-    redis = Redis.new(OPTIONS.merge(:host => "host", :port => 1234, :db => 1, :scheme => "foo"))
-    options = redis.client.options
-
-    options[:host] << "new_host"
-    options[:scheme] << "bar"
-    options.merge!(:db => 0)
-
-    assert_equal "host", redis.client.options[:host]
-    assert_equal 1, redis.client.options[:db]
-    assert_equal "foo", redis.client.options[:scheme]
+    assert_equal "host", redis._client.options[:host]
+    assert_equal 1234, redis._client.options[:port]
+    assert_equal 1, redis._client.options[:db]
+    assert_equal "foo", redis._client.options[:scheme]
   end
 
   def test_resolves_localhost

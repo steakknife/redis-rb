@@ -1,6 +1,4 @@
-# encoding: UTF-8
-
-require File.expand_path("helper", File.dirname(__FILE__))
+require_relative "helper"
 
 class TestRemoteServerControlCommands < Test::Unit::TestCase
 
@@ -82,7 +80,7 @@ class TestRemoteServerControlCommands < Test::Unit::TestCase
       break line
     end
 
-    assert_equal result, "OK"
+    assert_equal "OK", result
   end
 
   def test_echo
@@ -98,9 +96,10 @@ class TestRemoteServerControlCommands < Test::Unit::TestCase
   def test_object
     r.lpush "list", "value"
 
-    assert_equal r.object(:refcount, "list"), 1
-    assert_equal r.object(:encoding, "list"), "ziplist"
-    assert r.object(:idletime, "list").kind_of?(Fixnum)
+    assert_equal 1, r.object(:refcount, "list")
+    encoding = r.object(:encoding, "list")
+    assert "ziplist" == encoding || "quicklist" == encoding, "Wrong encoding for list"
+    assert r.object(:idletime, "list").kind_of?(Integer)
   end
 
   def test_sync
@@ -112,6 +111,65 @@ class TestRemoteServerControlCommands < Test::Unit::TestCase
   def test_slowlog
     r.slowlog(:reset)
     result = r.slowlog(:len)
-    assert_equal result, 0
+    assert_equal 0, result
+  end
+
+  def test_client
+    assert_equal r.instance_variable_get(:@client), r._client
+  end
+
+  def test_client_list
+    return if version < "2.4.0"
+
+    keys = [
+     "addr",
+     "fd",
+     "name",
+     "age",
+     "idle",
+     "flags",
+     "db",
+     "sub",
+     "psub",
+     "multi",
+     "qbuf",
+     "qbuf-free",
+     "obl",
+     "oll",
+     "omem",
+     "events",
+     "cmd"
+    ]
+
+    clients = r.client(:list)
+    clients.each do |client|
+      keys.each do |k|
+        msg = "expected #client(:list) to include #{k}"
+        assert client.keys.include?(k), msg
+      end
+    end
+  end
+
+  def test_client_kill
+    return if version < "2.6.9"
+
+    r.client(:setname, 'redis-rb')
+    clients = r.client(:list)
+    i = clients.index {|client| client['name'] == 'redis-rb'}
+    assert_equal "OK", r.client(:kill, clients[i]["addr"])
+
+    clients = r.client(:list)
+    i = clients.index {|client| client['name'] == 'redis-rb'}
+    assert_equal nil, i
+  end
+
+  def test_client_getname_and_setname
+    return if version < "2.6.9"
+
+    assert_equal nil, r.client(:getname)
+
+    r.client(:setname, 'redis-rb')
+    name = r.client(:getname)
+    assert_equal 'redis-rb', name
   end
 end
