@@ -150,9 +150,12 @@ class Redis
     end
 
     def call_pipeline(pipeline)
+      commands = pipeline.commands
+      return [] if commands.empty?
+
       with_reconnect pipeline.with_reconnect? do
         begin
-          pipeline.finish(call_pipelined(pipeline.commands)).tap do
+          pipeline.finish(call_pipelined(commands)).tap do
             self.db = pipeline.db if pipeline.db
           end
         rescue ConnectionError => e
@@ -334,6 +337,7 @@ class Redis
       @connection = @options[:driver].connect(@options)
       @pending_reads = 0
     rescue TimeoutError,
+           SocketError,
            Errno::ECONNREFUSED,
            Errno::EHOSTDOWN,
            Errno::EHOSTUNREACH,
@@ -443,6 +447,8 @@ class Redis
       options[:connect_timeout] = Float(options[:connect_timeout])
       options[:read_timeout]    = Float(options[:read_timeout])
       options[:write_timeout]   = Float(options[:write_timeout])
+
+      options[:reconnect_attempts] = options[:reconnect_attempts].to_i
 
       options[:db] = options[:db].to_i
       options[:driver] = _parse_driver(options[:driver]) || Connection.drivers.last

@@ -176,7 +176,7 @@ it can't connect to the server a `Redis::CannotConnectError` error will be raise
 ```ruby
 begin
   redis.ping
-rescue Exception => e
+rescue StandardError => e
   e.inspect
 # => #<Redis::CannotConnectError: Timed out connecting to Redis on 10.0.1.1:6380>
 
@@ -363,4 +363,4 @@ requests. You can also ask for help at `#redis-rb` on Freenode.
 [travis-home]:     https://travis-ci.org/
 [travis-image]:    https://secure.travis-ci.org/redis/redis-rb.svg?branch=master
 [travis-link]:     https://travis-ci.org/redis/redis-rb
-[rubydoc]:         https://www.rubydoc.info/gems/redis
+[rubydoc]:         http://www.rubydoc.info/gems/redis

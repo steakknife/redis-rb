@@ -1,7 +1,7 @@
-TEST_FILES   := $(shell find test -name *_test.rb -type f)
-REDIS_BRANCH := unstable
+TEST_FILES   := $(shell find ./test -name *_test.rb -type f)
+REDIS_BRANCH ?= unstable
 TMP          := tmp
-BUILD_DIR    := ${TMP}/redis-${REDIS_BRANCH}
+BUILD_DIR    := ${TMP}/cache/redis-${REDIS_BRANCH}
 TARBALL      := ${TMP}/redis-${REDIS_BRANCH}.tar.gz
 BINARY       := ${BUILD_DIR}/src/redis-server
 PID_PATH     := ${BUILD_DIR}/redis.pid
@@ -11,20 +11,14 @@ PORT         := 6381
 test: ${TEST_FILES}
 	make start
 	env SOCKET_PATH=${SOCKET_PATH} \
-		ruby -v $$(echo $? | tr ' ' '\n' | awk '{ print "-r./" $$0 }') -e ''
+		bundle exec ruby -v -e 'ARGV.each { |test_file| require test_file }' ${TEST_FILES}
 	make stop
 
 ${TMP}:
 	mkdir $@
 
-${TARBALL}: ${TMP}
-	wget https://github.com/antirez/redis/archive/${REDIS_BRANCH}.tar.gz -O $@
-
-${BINARY}: ${TARBALL} ${TMP}
-	rm -rf ${BUILD_DIR}
-	mkdir -p ${BUILD_DIR}
-	tar xf ${TARBALL} -C ${TMP}
-	cd ${BUILD_DIR} && make
+${BINARY}: ${TMP}
+	bin/build ${REDIS_BRANCH} ${TMP}
 
 stop:
 	(test -f ${PID_PATH} && (kill $$(cat ${PID_PATH}) || true) && rm -f ${PID_PATH}) || true
